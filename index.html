@@ -1,816 +1,633 @@
-<!DOCTYPE html>
-<html lang="en">
-<head>
-<meta charset="UTF-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1.0" />
-<title>HANDSTAND // TIMER</title>
-<link rel="preconnect" href="https://fonts.googleapis.com">
-<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-<link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700;800&family=Familjen+Grotesk:wght@400;500;600;700&display=swap" rel="stylesheet">
-<script src="https://cdnjs.cloudflare.com/ajax/libs/tensorflow/4.22.0/tf.min.js"></script>
-<style>
-  :root {
-    --bg: #07090f;
-    --surface: #0e1320;
-    --surface-2: #161c2e;
-    --line: #1f2940;
-    --text: #e6edf3;
-    --muted: #7d8590;
-    --accent: #00ff88;
-    --accent-dim: #00cc6a;
-    --warn: #ffb547;
-    --pb: #ff6b35;
+import React, { useState, useMemo } from 'react';
+import { LineChart, Line, XAxis, YAxis, ResponsiveContainer, ReferenceDot, Tooltip } from 'recharts';
+
+// ─────────────────────────────────────────────────────────────
+// Water rocket physics simulator
+// Adiabatic expansion of compressed air → water jet thrust
+// Then ballistic flight with drag
+// ─────────────────────────────────────────────────────────────
+function simulateRocket(waterML, psi, angleDeg) {
+  const g = 9.81;
+  const rhoWater = 1000;
+  const rhoAir = 1.225;
+  const Patm = 101325;
+  const gamma = 1.4;
+  const Cd = 0.5;
+
+  // 1.5 L L&P bottle assumptions
+  const Vbottle = 0.0015;            // m³
+  const dryMass = 0.047;             // kg (measured: empty bottle + cap)
+  const dNozzle = 0.022;             // m (standard PET neck)
+  const Anozzle = Math.PI * (dNozzle / 2) ** 2;
+  const Across = Math.PI * 0.04 ** 2; // bottle frontal area (~80 mm dia)
+
+  const Vwater0 = Math.max(0, Math.min(Vbottle * 0.95, waterML / 1e6));
+  const Vair0 = Vbottle - Vwater0;
+  const P0 = psi * 6894.76 + Patm;
+  const angle = (angleDeg * Math.PI) / 180;
+
+  if (Vair0 <= 0 || P0 <= Patm) {
+    return { peak: 0, range: 0, exitV: 0, burnT: 0, flightT: 0, peakIdx: 0, traj: [{ x: 0, y: 0, t: 0 }] };
   }
 
-  * { box-sizing: border-box; margin: 0; padding: 0; }
+  const dt = 0.0005;
+  let t = 0, x = 0, y = 0, vx = 0, vy = 0;
+  let mWater = Vwater0 * rhoWater;
+  let Vair = Vair0;
+  let burnT = null;
+  let peak = 0, peakIdx = 0;
+  const traj = [{ x: 0, y: 0, t: 0 }];
+  const exitV0 = Math.sqrt((2 * (P0 - Patm)) / rhoWater);
 
-  body {
-    background: var(--bg);
-    color: var(--text);
-    font-family: 'Familjen Grotesk', sans-serif;
-    min-height: 100vh;
-    overflow-x: hidden;
-    background-image:
-      radial-gradient(at 20% 10%, rgba(0, 255, 136, 0.05), transparent 50%),
-      radial-gradient(at 80% 80%, rgba(255, 107, 53, 0.04), transparent 50%);
-  }
+  let step = 0;
+  while (y >= 0 && t < 25) {
+    const mTot = dryMass + mWater;
+    let Fthrust = 0;
 
-  body::before {
-    content: '';
-    position: fixed;
-    inset: 0;
-    pointer-events: none;
-    background: repeating-linear-gradient(
-      0deg,
-      transparent,
-      transparent 2px,
-      rgba(255, 255, 255, 0.012) 2px,
-      rgba(255, 255, 255, 0.012) 4px
-    );
-    z-index: 100;
-  }
+    if (mWater > 0) {
+      const P = P0 * Math.pow(Vair0 / Vair, gamma);
+      if (P > Patm) {
+        const ve = Math.sqrt((2 * (P - Patm)) / rhoWater);
+        Fthrust = rhoWater * Anozzle * ve * ve;
+        const dm = rhoWater * Anozzle * ve * dt;
+        mWater = Math.max(0, mWater - dm);
+        Vair = Math.min(Vbottle, Vair + Anozzle * ve * dt);
+      }
+    }
+    if (mWater <= 0 && burnT === null) burnT = t;
 
-  .container { max-width: 1400px; margin: 0 auto; padding: 20px; }
+    const speed = Math.hypot(vx, vy);
+    let tx, ty;
+    if (speed < 0.05) {
+      tx = Fthrust * Math.cos(angle);
+      ty = Fthrust * Math.sin(angle);
+    } else {
+      tx = (Fthrust * vx) / speed;
+      ty = (Fthrust * vy) / speed;
+    }
+    const Fd = 0.5 * rhoAir * Cd * Across * speed * speed;
+    const dx = speed > 0.05 ? (-Fd * vx) / speed : 0;
+    const dy = speed > 0.05 ? (-Fd * vy) / speed : 0;
 
-  header {
-    display: flex;
-    justify-content: space-between;
-    align-items: baseline;
-    flex-wrap: wrap;
-    gap: 8px;
-    border-bottom: 1px solid var(--line);
-    padding-bottom: 14px;
-    margin-bottom: 20px;
-  }
+    const ax = (tx + dx) / mTot;
+    const ay = (ty + dy) / mTot - g;
 
-  .logo {
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 800;
-    font-size: 13px;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-  }
-  .logo span { color: var(--accent); }
+    vx += ax * dt;
+    vy += ay * dt;
+    x += vx * dt;
+    y += vy * dt;
 
-  .meta {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    color: var(--muted);
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-  }
+    if (y > peak) {
+      peak = y;
+      peakIdx = traj.length;
+    }
 
-  .meta-dot {
-    display: inline-block;
-    width: 6px; height: 6px;
-    border-radius: 50%;
-    background: var(--muted);
-    margin-right: 6px;
-    vertical-align: middle;
+    step++;
+    if (step % 40 === 0) traj.push({ x, y: Math.max(0, y), t });
+    t += dt;
   }
-  .meta-dot.active { background: var(--accent); box-shadow: 0 0 8px var(--accent); animation: pulse 1.5s infinite; }
-  .meta-dot.loading { background: var(--warn); animation: pulse 0.8s infinite; }
-  @keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: 0.4; } }
+  traj.push({ x, y: 0, t });
 
-  .grid {
-    display: grid;
-    grid-template-columns: 1.4fr 1fr;
-    gap: 16px;
-  }
-  @media (max-width: 900px) { .grid { grid-template-columns: 1fr; } }
+  return {
+    peak,
+    range: x,
+    exitV: exitV0,
+    burnT: burnT ?? 0,
+    flightT: t,
+    peakIdx,
+    initialThrust: 2 * Anozzle * (P0 - Patm),
+    traj,
+  };
+}
 
-  .panel {
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-    overflow: hidden;
-    position: relative;
-  }
+// ─────────────────────────────────────────────────────────────
+// Bottle SVG with live water level
+// ─────────────────────────────────────────────────────────────
+function BottleDiagram({ waterML, psi }) {
+  const fillPct = Math.min(1, waterML / 1500);
+  // INVERTED orientation: cap/nozzle at bottom (thrust exit),
+  // petaloid base at top (becomes the nose).
+  const bodyTop = 55;
+  const bodyBottom = 248;
+  const bodyHeight = bodyBottom - bodyTop;
+  const waterTop = bodyBottom - bodyHeight * fillPct;
+  const psiNeedle = Math.min(140, psi) / 140;
+  const needleAngle = -135 + psiNeedle * 270;
 
-  .panel-label {
-    position: absolute;
-    top: 8px; left: 12px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: var(--muted);
-    z-index: 5;
-    text-shadow: 0 0 6px rgba(0,0,0,0.7);
-  }
+  // Bottle silhouette flipped vertically: dome at top, body, shoulder taper,
+  // neck, ending at the tamper-ring level (cap is drawn separately below).
+  const bottlePath = `
+    M 75 38
+    Q 100 30 125 38
+    L 144 55
+    L 144 248
+    Q 144 273 122 285
+    L 122 314
+    L 116 318
+    L 84 318
+    L 78 314
+    L 78 285
+    Q 56 273 56 248
+    L 56 55
+    L 75 38
+    Z
+  `;
 
-  .camera-wrap {
-    aspect-ratio: 4/3;
-    position: relative;
-    background: #000;
-  }
-  .camera-wrap video, .camera-wrap canvas {
-    position: absolute; inset: 0;
-    width: 100%; height: 100%;
-    object-fit: cover;
-  }
-  .camera-wrap.mirrored video, .camera-wrap.mirrored canvas { transform: scaleX(-1); }
+  // Label now sits on the upper portion of the inverted bottle.
+  const labelTop = 70;
+  const labelBottom = 170;
 
-  .overlay-msg {
-    position: absolute;
-    inset: 0;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    flex-direction: column;
-    text-align: center;
-    padding: 20px;
-    background: rgba(7, 9, 15, 0.92);
-    z-index: 10;
-  }
-  .overlay-msg h2 {
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 700;
-    font-size: 16px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    margin-bottom: 10px;
-  }
-  .overlay-msg p {
-    color: var(--muted);
-    max-width: 380px;
-    font-size: 13px;
-    line-height: 1.55;
-    margin-bottom: 20px;
-  }
+  return (
+    <svg viewBox="0 0 200 380" className="w-full h-full">
+      <defs>
+        <linearGradient id="capRed" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#e63946" />
+          <stop offset="55%" stopColor="#c01e2c" />
+          <stop offset="100%" stopColor="#7a1018" />
+        </linearGradient>
+        <linearGradient id="plastic" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#3a2410" stopOpacity="0.10" />
+          <stop offset="18%" stopColor="#ffffff" stopOpacity="0.55" />
+          <stop offset="55%" stopColor="#ffffff" stopOpacity="0.15" />
+          <stop offset="100%" stopColor="#3a2410" stopOpacity="0.12" />
+        </linearGradient>
+        <linearGradient id="waterFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#bcdcec" stopOpacity="0.7" />
+          <stop offset="100%" stopColor="#6a9fc0" stopOpacity="0.55" />
+        </linearGradient>
+        <linearGradient id="labelBrown" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#4a2a14" />
+          <stop offset="50%" stopColor="#3a1e0c" />
+          <stop offset="100%" stopColor="#2a1408" />
+        </linearGradient>
+        <pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse">
+          <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#5C3317" strokeWidth="0.3" opacity="0.15" />
+        </pattern>
+        <clipPath id="bottleClip">
+          <path d={bottlePath} />
+        </clipPath>
+      </defs>
 
-  .btn {
-    background: var(--accent);
-    color: #000;
-    border: none;
-    padding: 11px 22px;
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 700;
-    font-size: 12px;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    cursor: pointer;
-    transition: all 0.15s ease;
-    border-radius: 2px;
-  }
-  .btn:hover { background: #fff; }
-  .btn:disabled { opacity: 0.4; cursor: not-allowed; background: var(--muted); }
-  .btn-ghost {
-    background: transparent;
-    color: var(--text);
-    border: 1px solid var(--line);
-  }
-  .btn-ghost:hover { border-color: var(--accent); color: var(--accent); background: transparent; }
+      <rect width="200" height="380" fill="url(#grid)" />
 
-  .status-bar {
-    position: absolute;
-    bottom: 0; left: 0; right: 0;
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    padding: 9px 12px;
-    background: rgba(7, 9, 15, 0.7);
-    backdrop-filter: blur(8px);
-    border-top: 1px solid var(--line);
-    z-index: 4;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-  }
-  .status-bar .left { color: var(--muted); display: flex; align-items: center; gap: 8px; }
-  .status-bar .right { display: flex; gap: 12px; }
+      {/* clear plastic body */}
+      <path d={bottlePath} fill="url(#plastic)" stroke="#3a2410" strokeWidth="1.6" />
 
-  .conf-bar {
-    display: inline-block;
-    width: 60px;
-    height: 4px;
-    background: var(--line);
-    border-radius: 2px;
-    overflow: hidden;
-    vertical-align: middle;
-  }
-  .conf-bar div {
-    height: 100%;
-    background: var(--accent);
-    transition: width 0.2s;
-  }
+      {/* water inside - gravity pulls it down toward the cap (nozzle) */}
+      <g clipPath="url(#bottleClip)">
+        {waterML > 0 && (
+          <>
+            <rect x="50" y={waterTop} width="100" height={320 - waterTop} fill="url(#waterFill)" />
+            <path
+              d={`M 50 ${waterTop} Q 75 ${waterTop - 2.5} 100 ${waterTop} T 150 ${waterTop}`}
+              fill="none"
+              stroke="#3a2410"
+              strokeWidth="0.8"
+              opacity="0.5"
+            />
+          </>
+        )}
+      </g>
 
-  .timer-card {
-    padding: 26px 22px;
-    border-radius: 4px;
-    background: linear-gradient(135deg, var(--surface) 0%, var(--surface-2) 100%);
-    border: 1px solid var(--line);
-    position: relative;
-    overflow: hidden;
-    transition: all 0.3s ease;
-  }
-  .timer-card.holding {
-    border-color: var(--accent);
-    box-shadow: 0 0 40px rgba(0, 255, 136, 0.15), inset 0 0 30px rgba(0, 255, 136, 0.05);
-  }
+      {/* highlight stripe on the right (gives clear-plastic shine) */}
+      <path
+        d="M 135 62 Q 138 155 135 245"
+        fill="none"
+        stroke="#ffffff"
+        strokeWidth="2"
+        opacity="0.45"
+      />
 
-  .timer-state {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    letter-spacing: 0.2em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 6px;
-  }
-  .timer-card.holding .timer-state { color: var(--accent); }
+      {/* petaloid base hints - now at TOP (functioning as the nose) */}
+      <g stroke="#3a2410" strokeWidth="0.6" fill="none" opacity="0.55">
+        <path d="M 72 38 Q 75 30 78 38" />
+        <path d="M 88 35 Q 91 26 94 35" />
+        <path d="M 106 35 Q 109 26 112 35" />
+        <path d="M 122 38 Q 125 30 128 38" />
+      </g>
 
-  .timer-display {
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 800;
-    font-size: clamp(48px, 10vw, 88px);
-    line-height: 1;
-    letter-spacing: -0.04em;
-    font-variant-numeric: tabular-nums;
-    color: var(--text);
-    text-shadow: 0 0 30px rgba(230, 237, 243, 0.1);
-  }
-  .timer-card.holding .timer-display {
-    color: var(--accent);
-    text-shadow: 0 0 24px rgba(0, 255, 136, 0.4);
-  }
+      {/* tamper-evident ring (now at bottom, just above cap) */}
+      <rect x="82" y="316" width="36" height="6" fill="#a01828" stroke="#3a2410" strokeWidth="0.4" />
 
-  .timer-sub {
-    font-family: 'Familjen Grotesk', sans-serif;
-    font-size: 12px;
-    color: var(--muted);
-    margin-top: 6px;
-  }
+      {/* red screw cap - NOW AT BOTTOM (nozzle / thrust exit) */}
+      <rect x="80" y="322" width="40" height="26" rx="1.5" fill="url(#capRed)" stroke="#3a2410" strokeWidth="1.2" />
+      {/* cap bottom rim */}
+      <ellipse cx="100" cy="348" rx="20" ry="2.2" fill="#7a1018" />
+      {/* cap ribbing */}
+      <g stroke="#7a1018" strokeWidth="0.5" opacity="0.7">
+        {Array.from({ length: 11 }, (_, i) => (
+          <line key={i} x1={83 + i * 3.4} y1="324" x2={83 + i * 3.4} y2="346" />
+        ))}
+      </g>
+      {/* cap highlight */}
+      <rect x="82.5" y="324" width="3" height="20" fill="#ffffff" opacity="0.35" rx="1" />
 
-  .stats {
-    display: grid;
-    grid-template-columns: 1fr 1fr;
-    gap: 10px;
-    margin-top: 14px;
-  }
-  .stat {
-    padding: 14px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-  }
-  .stat.pb {
-    border-color: rgba(255, 107, 53, 0.4);
-    background: linear-gradient(135deg, var(--surface), rgba(255, 107, 53, 0.05));
-  }
-  .stat-label {
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: var(--muted);
-    margin-bottom: 6px;
-  }
-  .stat.pb .stat-label { color: var(--pb); }
-  .stat-value {
-    font-family: 'JetBrains Mono', monospace;
-    font-weight: 700;
-    font-size: 26px;
-    font-variant-numeric: tabular-nums;
-    letter-spacing: -0.02em;
-  }
+      {/* Entire L&P label rotated 180° — bottle is upside-down,
+          so the label & logo appear inverted (as they would in real life). */}
+      <g transform="rotate(180 100 120)">
+        {/* brown L&P label wrapping body */}
+        <path
+          d={`M 56 ${labelTop}
+              Q 100 ${labelTop - 4} 144 ${labelTop}
+              L 144 ${labelBottom}
+              Q 100 ${labelBottom + 4} 56 ${labelBottom}
+              Z`}
+          fill="url(#labelBrown)"
+          stroke="#1a0e05"
+          strokeWidth="0.4"
+        />
 
-  .log-panel {
-    margin-top: 14px;
-    padding: 18px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 4px;
-  }
-  .log-header {
-    display: flex;
-    justify-content: space-between;
-    align-items: center;
-    margin-bottom: 10px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 11px;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: var(--muted);
-  }
-  .log-list {
-    list-style: none;
-    max-height: 220px;
-    overflow-y: auto;
-  }
-  .log-list::-webkit-scrollbar { width: 4px; }
-  .log-list::-webkit-scrollbar-track { background: var(--line); }
-  .log-list::-webkit-scrollbar-thumb { background: var(--muted); }
+        {/* yellow droplets above L&P (splash effect) */}
+        <g>
+          <ellipse cx="78" cy="87" rx="2.6" ry="4" fill="#f4c842" transform="rotate(-22 78 87)" />
+          <ellipse cx="85" cy="82" rx="2.2" ry="3.4" fill="#f4c842" transform="rotate(-6 85 82)" />
+          <ellipse cx="93" cy="84" rx="2.6" ry="4" fill="#f4c842" transform="rotate(14 93 84)" />
+          <ellipse cx="100" cy="88" rx="1.8" ry="2.8" fill="#f4c842" transform="rotate(28 100 88)" />
+        </g>
 
-  .log-item {
-    display: grid;
-    grid-template-columns: 36px 1fr auto;
-    align-items: center;
-    padding: 9px 0;
-    gap: 12px;
-    border-bottom: 1px solid var(--line);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 13px;
-  }
-  .log-item:last-child { border-bottom: none; }
-  .log-item .idx { color: var(--muted); font-size: 10px; }
-  .log-item .bar {
-    height: 4px;
-    background: var(--line);
-    border-radius: 2px;
-    overflow: hidden;
-  }
-  .log-item .bar div {
-    height: 100%;
-    background: var(--accent-dim);
-    transition: width 0.4s;
-  }
-  .log-item.best .bar div { background: var(--pb); }
-  .log-item .dur { font-variant-numeric: tabular-nums; font-weight: 700; }
-  .log-item.best .dur { color: var(--pb); }
-  .empty-log {
-    text-align: center;
-    padding: 22px;
-    color: var(--muted);
-    font-size: 13px;
-  }
+        {/* L&P logo */}
+        <text
+          x="92"
+          y="116"
+          textAnchor="middle"
+          fontFamily="Fraunces, serif"
+          fontSize="24"
+          fontWeight="900"
+          fill="#ffffff"
+          fontStyle="italic"
+          style={{ letterSpacing: '-0.02em' }}
+        >
+          L&amp;P
+        </text>
 
-  .controls {
-    display: flex;
-    gap: 8px;
-    margin-top: 10px;
-    flex-wrap: wrap;
-  }
-  .toggle {
-    display: flex;
-    align-items: center;
-    gap: 6px;
-    padding: 7px 11px;
-    background: var(--surface);
-    border: 1px solid var(--line);
-    border-radius: 2px;
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    letter-spacing: 0.1em;
-    text-transform: uppercase;
-    cursor: pointer;
-    user-select: none;
-    color: var(--muted);
-    transition: all 0.15s;
-  }
-  .toggle:hover { color: var(--text); }
-  .toggle.on { color: var(--accent); border-color: var(--accent); }
+        {/* small LEMON & PAEROA subtext */}
+        <text
+          x="118"
+          y="114"
+          fontFamily="Fraunces, serif"
+          fontSize="3.6"
+          fontWeight="700"
+          fill="#f4c842"
+          letterSpacing="0.3"
+        >
+          LEMON
+        </text>
+        <text
+          x="118"
+          y="119"
+          fontFamily="Fraunces, serif"
+          fontSize="3.6"
+          fontWeight="700"
+          fill="#f4c842"
+          letterSpacing="0.3"
+        >
+          &amp; PAEROA
+        </text>
 
-  footer {
-    margin-top: 24px;
-    padding-top: 14px;
-    border-top: 1px solid var(--line);
-    font-family: 'JetBrains Mono', monospace;
-    font-size: 10px;
-    color: var(--muted);
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    text-align: center;
-  }
-</style>
-</head>
-<body>
-  <div class="container">
-    <header>
-      <div class="logo">HANDSTAND<span>//</span>TIMER</div>
-      <div class="meta">
-        <span class="meta-dot" id="status-dot"></span>
-        <span id="status-text">Standby</span>
-        &nbsp;·&nbsp;FPS <span id="fps">--</span>
+        {/* white Zero Sugar ribbon with red border & text */}
+        <path
+          d="M 60 131 L 132 131 L 138 139 L 132 147 L 60 147 L 54 139 Z"
+          fill="#ffffff"
+          stroke="#c01e2c"
+          strokeWidth="0.9"
+        />
+        <path d="M 54 139 L 60 131 L 60 147 Z" fill="#c01e2c" opacity="0.85" />
+        <path d="M 138 139 L 132 131 L 132 147 Z" fill="#c01e2c" opacity="0.85" />
+        <text
+          x="96"
+          y="142.5"
+          textAnchor="middle"
+          fontFamily="Fraunces, serif"
+          fontSize="8.5"
+          fontWeight="700"
+          fill="#c01e2c"
+          fontStyle="italic"
+        >
+          Zero Sugar
+        </text>
+
+        {/* lemon with leaf */}
+        <g transform="translate(120 160)">
+          <path
+            d="M -2 -8 Q 2 -12 6 -9 Q 4 -6 -2 -8 Z"
+            fill="#5a8c2e"
+            stroke="#3d6020"
+            strokeWidth="0.3"
+          />
+          <path d="M -1 -8 L 4 -10" stroke="#3d6020" strokeWidth="0.3" fill="none" />
+          <ellipse cx="0" cy="0" rx="9" ry="7" fill="#f4c842" stroke="#b8881c" strokeWidth="0.5" />
+          <ellipse cx="-8.5" cy="0" rx="1.5" ry="1.2" fill="#e8b830" />
+          <ellipse cx="8.5" cy="0" rx="1.5" ry="1.2" fill="#e8b830" />
+          <ellipse cx="-2" cy="-2.5" rx="3.5" ry="2" fill="#fbe890" opacity="0.7" />
+        </g>
+
+        {/* small recycle text */}
+        <text
+          x="68"
+          y="164"
+          fontFamily="JetBrains Mono, monospace"
+          fontSize="2.4"
+          fill="#ffffff"
+          opacity="0.7"
+        >
+          ♻ Clear bottles recycle better
+        </text>
+      </g>
+
+      {/* water-level annotation (only shown when water present) */}
+      {waterML > 0 && (
+        <>
+          <line x1="36" y1={waterTop} x2="55" y2={waterTop} stroke="#3a2410" strokeWidth="0.8" strokeDasharray="2 2" />
+          <line x1="145" y1={waterTop} x2="152" y2={waterTop} stroke="#3a2410" strokeWidth="0.8" strokeDasharray="2 2" opacity="0.5" />
+          <text x="34" y={waterTop + 3} textAnchor="end" fontFamily="JetBrains Mono, monospace" fontSize="9" fill="#3a2410" fontWeight="700">
+            {waterML}mL
+          </text>
+        </>
+      )}
+
+      {/* launch direction indicator (top-left) */}
+      <g transform="translate(22 32)">
+        <polygon points="0,-10 -4,-2 4,-2" fill="#3a2410" />
+        <line x1="0" y1="-2" x2="0" y2="10" stroke="#3a2410" strokeWidth="1.5" />
+        <text x="9" y="5" fontFamily="JetBrains Mono, monospace" fontSize="6.5" fill="#3a2410" fontWeight="700" letterSpacing="0.8">
+          LAUNCH
+        </text>
+      </g>
+
+      {/* nozzle / exhaust indicator at bottom */}
+      <g transform="translate(100 365)">
+        <line x1="-6" y1="-8" x2="0" y2="0" stroke="#3a2410" strokeWidth="0.6" opacity="0.5" />
+        <line x1="6" y1="-8" x2="0" y2="0" stroke="#3a2410" strokeWidth="0.6" opacity="0.5" />
+        <line x1="0" y1="-8" x2="0" y2="0" stroke="#3a2410" strokeWidth="0.6" opacity="0.5" />
+        <text x="14" y="-2" fontFamily="JetBrains Mono, monospace" fontSize="5.5" fill="#3a2410" opacity="0.7" letterSpacing="0.5">
+          NOZZLE
+        </text>
+      </g>
+
+      {/* pressure gauge — top right */}
+      <g transform="translate(176 56)">
+        <circle r="18" fill="#fbf5e0" stroke="#3a2410" strokeWidth="1.4" />
+        {/* tick marks */}
+        {Array.from({ length: 9 }, (_, i) => {
+          const a = (-135 + i * 33.75) * Math.PI / 180;
+          return (
+            <line
+              key={i}
+              x1={13 * Math.cos(a)}
+              y1={13 * Math.sin(a)}
+              x2={16 * Math.cos(a)}
+              y2={16 * Math.sin(a)}
+              stroke="#3a2410"
+              strokeWidth="0.6"
+            />
+          );
+        })}
+        <circle r="1.8" fill="#3a2410" />
+        <line
+          x1="0"
+          y1="0"
+          x2={13 * Math.cos((needleAngle * Math.PI) / 180)}
+          y2={13 * Math.sin((needleAngle * Math.PI) / 180)}
+          stroke="#a02020"
+          strokeWidth="1.6"
+          strokeLinecap="round"
+        />
+        <text x="0" y="28" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="7.5" fill="#3a2410" fontWeight="700">
+          {psi} PSI
+        </text>
+      </g>
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Slider component
+// ─────────────────────────────────────────────────────────────
+function Slider({ label, value, setValue, min, max, step, unit, optimal }) {
+  const pct = ((value - min) / (max - min)) * 100;
+  const optimalPct = optimal !== undefined ? ((optimal - min) / (max - min)) * 100 : null;
+
+  return (
+    <div className="space-y-2">
+      <div className="flex items-baseline justify-between">
+        <span className="text-xs uppercase tracking-[0.2em] text-[#5C3317] font-semibold" style={{ fontFamily: 'Fraunces, serif' }}>
+          {label}
+        </span>
+        <span className="text-2xl text-[#3a2410] tabular-nums" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+          {value}
+          <span className="text-xs ml-1 opacity-60">{unit}</span>
+        </span>
       </div>
-    </header>
+      <div className="relative">
+        {optimalPct !== null && (
+          <div
+            className="absolute top-1/2 -translate-y-1/2 w-0.5 h-5 bg-[#E8C547] z-0"
+            style={{ left: `${optimalPct}%` }}
+            title={`Optimal: ${optimal}${unit}`}
+          />
+        )}
+        <input
+          type="range"
+          min={min}
+          max={max}
+          step={step}
+          value={value}
+          onChange={(e) => setValue(Number(e.target.value))}
+          className="w-full h-2 rounded-full appearance-none cursor-pointer relative z-10"
+          style={{
+            background: `linear-gradient(to right, #5C3317 0%, #8B5A1F ${pct}%, #d6c4a0 ${pct}%, #d6c4a0 100%)`,
+            WebkitAppearance: 'none',
+          }}
+        />
+      </div>
+    </div>
+  );
+}
 
-    <div class="grid">
-      <div>
-        <div class="panel camera-wrap mirrored" id="cam-wrap">
-          <span class="panel-label">// FEED 01</span>
-          <video id="video" playsinline muted autoplay></video>
-          <canvas id="canvas"></canvas>
+// ─────────────────────────────────────────────────────────────
+// Main component
+// ─────────────────────────────────────────────────────────────
+export default function WaterRocketSim() {
+  const [water, setWater] = useState(500);
+  const [psi, setPsi] = useState(70);
+  const [angle, setAngle] = useState(80);
 
-          <div class="overlay-msg" id="overlay">
-            <h2 id="overlay-title">Initialize</h2>
-            <p id="overlay-desc">Grant camera access to start tracking. Position the camera so your full body is visible when inverted — about 8 feet of clear space helps.</p>
-            <button class="btn" id="start-btn">Start camera</button>
+  const result = useMemo(() => simulateRocket(water, psi, angle), [water, psi, angle]);
+
+  const peakPoint = result.traj[result.peakIdx] || { x: 0, y: 0 };
+
+  return (
+    <div className="min-h-screen w-full p-4 sm:p-6" style={{ background: '#f5ecd4' }}>
+      <style>{`
+        @import url('https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700;9..144,900&family=JetBrains+Mono:wght@400;700&display=swap');
+        input[type=range]::-webkit-slider-thumb {
+          -webkit-appearance: none;
+          appearance: none;
+          width: 22px;
+          height: 22px;
+          border-radius: 50%;
+          background: #f5ecd4;
+          border: 2.5px solid #3a2410;
+          cursor: pointer;
+          box-shadow: 0 2px 4px rgba(58,36,16,0.3);
+        }
+        input[type=range]::-moz-range-thumb {
+          width: 22px;
+          height: 22px;
+          border-radius: 50%;
+          background: #f5ecd4;
+          border: 2.5px solid #3a2410;
+          cursor: pointer;
+        }
+        .grid-bg {
+          background-image:
+            linear-gradient(rgba(92,51,23,0.06) 1px, transparent 1px),
+            linear-gradient(90deg, rgba(92,51,23,0.06) 1px, transparent 1px);
+          background-size: 20px 20px;
+        }
+      `}</style>
+
+      <div className="max-w-3xl mx-auto">
+        {/* Header */}
+        <div className="border-b-2 border-[#3a2410] pb-4 mb-6 grid-bg">
+          <div className="flex items-baseline justify-between flex-wrap gap-2">
+            <h1
+              className="text-3xl sm:text-4xl text-[#3a2410] leading-none"
+              style={{ fontFamily: 'Fraunces, serif', fontWeight: 900, letterSpacing: '-0.02em' }}
+            >
+              Water Rocket Lab
+            </h1>
+            <span
+              className="text-[10px] uppercase tracking-[0.3em] text-[#5C3317]"
+              style={{ fontFamily: 'JetBrains Mono, monospace' }}
+            >
+              FIG.01 / 1.5L L&P
+            </span>
           </div>
+          <p className="text-sm text-[#5C3317] mt-2 italic" style={{ fontFamily: 'Fraunces, serif' }}>
+            Tune your water and pressure. See how high &amp; how far it goes.
+          </p>
+        </div>
 
-          <div class="status-bar" id="status-bar" style="display:none">
-            <div class="left">Detection <span class="conf-bar"><div id="conf-fill" style="width:0%"></div></span></div>
-            <div class="right">
-              <span>Pose <span id="pose-state" style="color:var(--text)">—</span></span>
+        {/* Diagram + stats */}
+        <div className="grid grid-cols-2 gap-4 mb-6">
+          <div className="bg-[#fbf5e0] border-2 border-[#3a2410] p-2 aspect-[200/380] relative">
+            <div className="absolute top-2 left-2 text-[9px] uppercase tracking-widest text-[#5C3317]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+              flight orientation
             </div>
+            <BottleDiagram waterML={water} psi={psi} />
+          </div>
+
+          <div className="space-y-2">
+            <StatCard label="Peak Altitude" value={result.peak.toFixed(1)} unit="m" big />
+            <StatCard label="Range" value={result.range.toFixed(1)} unit="m" />
+            <StatCard label="Exit Velocity" value={result.exitV.toFixed(1)} unit="m/s" />
+            <StatCard label="Burn Time" value={(result.burnT * 1000).toFixed(0)} unit="ms" />
+            <StatCard label="Peak Thrust" value={result.initialThrust.toFixed(1)} unit="N" />
           </div>
         </div>
 
-        <div class="controls">
-          <div class="toggle on" id="mirror-toggle">⇋ Mirror</div>
-          <div class="toggle" id="skeleton-toggle">⌗ Skeleton</div>
-          <div class="toggle" id="audio-toggle">♪ Audio</div>
-          <button class="btn btn-ghost" id="reset-btn" style="margin-left:auto">Reset session</button>
-        </div>
-      </div>
-
-      <div>
-        <div class="timer-card" id="timer-card">
-          <div class="timer-state" id="timer-state">// Awaiting handstand</div>
-          <div class="timer-display" id="timer-display">00.00</div>
-          <div class="timer-sub" id="timer-sub">Hold position. Timer starts automatically.</div>
-        </div>
-
-        <div class="stats">
-          <div class="stat pb">
-            <div class="stat-label">PB · Session</div>
-            <div class="stat-value" id="pb-val">--.--</div>
+        {/* Controls */}
+        <div className="bg-[#fbf5e0] border-2 border-[#3a2410] p-5 mb-6 space-y-5">
+          <div className="flex items-center gap-2 mb-1">
+            <div className="h-px flex-1 bg-[#3a2410] opacity-30" />
+            <span
+              className="text-[10px] uppercase tracking-[0.3em] text-[#5C3317]"
+              style={{ fontFamily: 'JetBrains Mono, monospace' }}
+            >
+              Controls
+            </span>
+            <div className="h-px flex-1 bg-[#3a2410] opacity-30" />
           </div>
-          <div class="stat">
-            <div class="stat-label">Attempts</div>
-            <div class="stat-value" id="count-val">0</div>
+          <Slider label="Water Volume" value={water} setValue={setWater} min={0} max={1500} step={25} unit="mL" optimal={500} />
+          <Slider label="Pressure" value={psi} setValue={setPsi} min={20} max={120} step={5} unit="PSI" />
+          <Slider label="Launch Angle" value={angle} setValue={setAngle} min={45} max={90} step={1} unit="°" />
+          <div className="text-[10px] text-[#5C3317] opacity-70 flex items-center gap-2 pt-1" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+            <div className="w-2 h-2 bg-[#E8C547]" />
+            yellow marker = optimum fill (~⅓ of bottle)
           </div>
         </div>
 
-        <div class="log-panel">
-          <div class="log-header">
-            <span>Session log</span>
-            <span id="total-time">Σ 00:00</span>
+        {/* Trajectory chart */}
+        <div className="bg-[#fbf5e0] border-2 border-[#3a2410] p-4 mb-6">
+          <div className="flex items-baseline justify-between mb-3">
+            <h2 className="text-sm uppercase tracking-[0.2em] text-[#3a2410] font-semibold" style={{ fontFamily: 'Fraunces, serif' }}>
+              Flight Trajectory
+            </h2>
+            <span className="text-[10px] text-[#5C3317]" style={{ fontFamily: 'JetBrains Mono, monospace' }}>
+              altitude vs. distance (m)
+            </span>
           </div>
-          <ul class="log-list" id="log-list">
-            <li class="empty-log">No attempts yet. Kick up to begin.</li>
-          </ul>
+          <div className="h-56">
+            <ResponsiveContainer width="100%" height="100%">
+              <LineChart data={result.traj} margin={{ top: 10, right: 10, bottom: 5, left: -10 }}>
+                <XAxis
+                  dataKey="x"
+                  type="number"
+                  domain={[0, 'dataMax + 5']}
+                  tick={{ fontSize: 10, fontFamily: 'JetBrains Mono, monospace', fill: '#5C3317' }}
+                  stroke="#3a2410"
+                  tickFormatter={(v) => v.toFixed(0)}
+                />
+                <YAxis
+                  dataKey="y"
+                  tick={{ fontSize: 10, fontFamily: 'JetBrains Mono, monospace', fill: '#5C3317' }}
+                  stroke="#3a2410"
+                  tickFormatter={(v) => v.toFixed(0)}
+                />
+                <Tooltip
+                  contentStyle={{
+                    background: '#fbf5e0',
+                    border: '1.5px solid #3a2410',
+                    fontFamily: 'JetBrains Mono, monospace',
+                    fontSize: 11,
+                  }}
+                  formatter={(val, name) => [val.toFixed(1) + ' m', name === 'y' ? 'alt' : name]}
+                  labelFormatter={(v) => 'x = ' + v.toFixed(1) + ' m'}
+                />
+                <Line type="monotone" dataKey="y" stroke="#5C3317" strokeWidth={2.2} dot={false} />
+                <ReferenceDot x={peakPoint.x} y={peakPoint.y} r={5} fill="#E8C547" stroke="#3a2410" strokeWidth={1.5} />
+              </LineChart>
+            </ResponsiveContainer>
+          </div>
+        </div>
+
+        {/* Notes */}
+        <div className="text-xs text-[#5C3317] space-y-2 leading-relaxed" style={{ fontFamily: 'Fraunces, serif' }}>
+          <p>
+            <span className="font-bold uppercase tracking-wider text-[10px]">Sweet spot:</span> About one-third water (≈500 mL)
+            usually maximises altitude. Too little water = not enough reaction mass; too much = not enough air to push it.
+          </p>
+          <p>
+            <span className="font-bold uppercase tracking-wider text-[10px]">Pressure:</span> A standard 2 L PET bottle is rated
+            around 80–100 PSI before failing. Stay well below burst pressure, wear eye protection, and launch outdoors with people clear.
+          </p>
+          <p className="opacity-70">
+            <span className="font-bold uppercase tracking-wider text-[10px]">Model:</span> Adiabatic air expansion (γ=1.4), Bernoulli
+            exit velocity, drag with Cd≈0.5, dry mass = 47 g (measured), 22 mm nozzle. Real flights will vary with wind, fins, and nose weight.
+          </p>
         </div>
       </div>
     </div>
+  );
+}
 
-    <footer>
-      MoveNet · TensorFlow.js · Inference runs locally · No video leaves your device
-    </footer>
-  </div>
-
-<script>
-(async () => {
-  const $ = id => document.getElementById(id);
-  const video = $('video');
-  const canvas = $('canvas');
-  const ctx = canvas.getContext('2d');
-  const overlay = $('overlay');
-  const overlayTitle = $('overlay-title');
-  const overlayDesc = $('overlay-desc');
-  const startBtn = $('start-btn');
-  const statusBar = $('status-bar');
-  const confFill = $('conf-fill');
-  const poseState = $('pose-state');
-  const statusDot = $('status-dot');
-  const statusText = $('status-text');
-  const fpsEl = $('fps');
-  const timerCard = $('timer-card');
-  const timerState = $('timer-state');
-  const timerDisplay = $('timer-display');
-  const timerSub = $('timer-sub');
-  const pbVal = $('pb-val');
-  const countVal = $('count-val');
-  const logList = $('log-list');
-  const totalTime = $('total-time');
-  const camWrap = $('cam-wrap');
-  const mirrorToggle = $('mirror-toggle');
-  const skeletonToggle = $('skeleton-toggle');
-  const audioToggle = $('audio-toggle');
-  const resetBtn = $('reset-btn');
-
-  let model = null;
-  let running = false;
-  let mirror = true;
-  let drawSkeleton = false;
-  let audioCue = false;
-
-  let consecHand = 0;
-  let consecNo = 0;
-  const ENTER_THRESHOLD = 5;
-  const EXIT_THRESHOLD = 12;
-  let inHandstand = false;
-  let handstandStart = 0;
-
-  const attempts = [];
-  let pb = 0;
-
-  let frames = 0;
-  let fpsLastUpdate = performance.now();
-
-  function setStatus(text, mode) {
-    statusText.textContent = text;
-    statusDot.className = 'meta-dot ' + (mode || '');
-  }
-
-  function fmtTime(ms) {
-    const s = ms / 1000;
-    if (s < 60) return s.toFixed(2);
-    const m = Math.floor(s / 60);
-    const r = (s - m * 60).toFixed(2).padStart(5, '0');
-    return `${m}:${r}`;
-  }
-
-  function fmtTotal(ms) {
-    const s = Math.floor(ms / 1000);
-    const m = Math.floor(s / 60);
-    const r = (s % 60).toString().padStart(2, '0');
-    return `Σ ${m.toString().padStart(2,'0')}:${r}`;
-  }
-
-  function beep(freq, dur) {
-    if (!audioCue) return;
-    try {
-      const ac = new (window.AudioContext || window.webkitAudioContext)();
-      const o = ac.createOscillator();
-      const g = ac.createGain();
-      o.connect(g); g.connect(ac.destination);
-      o.frequency.value = freq;
-      o.type = 'sine';
-      g.gain.setValueAtTime(0.15, ac.currentTime);
-      g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
-      o.start();
-      o.stop(ac.currentTime + dur);
-    } catch (e) {}
-  }
-
-  function renderLog() {
-    countVal.textContent = attempts.length;
-    pbVal.textContent = pb ? fmtTime(pb) : '--.--';
-    const total = attempts.reduce((s, a) => s + a.duration, 0);
-    totalTime.textContent = fmtTotal(total);
-
-    if (attempts.length === 0) {
-      logList.innerHTML = '<li class="empty-log">No attempts yet. Kick up to begin.</li>';
-      return;
-    }
-    const max = Math.max(...attempts.map(a => a.duration));
-    logList.innerHTML = attempts.slice().reverse().map((a, i) => {
-      const real_i = attempts.length - i;
-      const w = (a.duration / max) * 100;
-      const best = a.duration === pb;
-      return `
-        <li class="log-item ${best ? 'best' : ''}">
-          <span class="idx">#${real_i.toString().padStart(2,'0')}</span>
-          <div class="bar"><div style="width:${w}%"></div></div>
-          <span class="dur">${fmtTime(a.duration)}s${best ? ' ★' : ''}</span>
-        </li>
-      `;
-    }).join('');
-  }
-
-  async function startCamera() {
-    setStatus('Requesting camera…', 'loading');
-    overlayTitle.textContent = 'Connecting';
-    overlayDesc.textContent = 'Camera permission required…';
-    startBtn.style.display = 'none';
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
-        audio: false
-      });
-      video.srcObject = stream;
-      await new Promise(r => video.onloadedmetadata = r);
-      await video.play();
-
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-
-      setStatus('Loading model…', 'loading');
-      overlayDesc.textContent = 'Loading MoveNet weights (~10MB)…';
-
-      await tf.setBackend('webgl');
-      await tf.ready();
-
-      const MODEL_URL = 'https://storage.googleapis.com/tfjs-models/savedmodel/movenet/singlepose/lightning/4/model.json';
-      model = await tf.loadGraphModel(MODEL_URL);
-
-      const dummy = tf.zeros([1, 192, 192, 3], 'int32');
-      const out = await model.executeAsync(dummy);
-      tf.dispose(out);
-      tf.dispose(dummy);
-
-      overlay.style.display = 'none';
-      statusBar.style.display = 'flex';
-      setStatus('Live', 'active');
-
-      running = true;
-      requestAnimationFrame(loop);
-    } catch (err) {
-      console.error(err);
-      overlayTitle.textContent = 'Error';
-      overlayDesc.textContent = (err && err.message) || 'Could not start camera or model.';
-      startBtn.textContent = 'Retry';
-      startBtn.style.display = 'inline-block';
-      setStatus('Error', '');
-    }
-  }
-
-  async function predictPose() {
-    const input = tf.tidy(() => {
-      const img = tf.browser.fromPixels(video);
-      return tf.image.resizeBilinear(img, [192, 192]).toInt().expandDims(0);
-    });
-    const result = await model.executeAsync(input);
-    const data = await result.data();
-    input.dispose();
-    if (Array.isArray(result)) result.forEach(t => t.dispose()); else result.dispose();
-
-    const kp = [];
-    for (let i = 0; i < 17; i++) {
-      kp.push({
-        y: data[i * 3] * video.videoHeight,
-        x: data[i * 3 + 1] * video.videoWidth,
-        score: data[i * 3 + 2]
-      });
-    }
-    return kp;
-  }
-
-  function classifyHandstand(kp) {
-    const MIN_S = 0.25;
-    const ls = kp[5], rs = kp[6], lh = kp[11], rh = kp[12];
-
-    if (ls.score < MIN_S || rs.score < MIN_S || lh.score < MIN_S || rh.score < MIN_S) {
-      return { isHand: false, confidence: 0 };
-    }
-
-    const ankles = [kp[15], kp[16]].filter(p => p.score > MIN_S);
-    if (ankles.length === 0) return { isHand: false, confidence: 0.1 };
-
-    const shoulderY = (ls.y + rs.y) / 2;
-    const shoulderX = (ls.x + rs.x) / 2;
-    const hipY = (lh.y + rh.y) / 2;
-    const hipX = (lh.x + rh.x) / 2;
-    const ankleY = Math.min(...ankles.map(p => p.y));
-
-    if (ankleY >= hipY - 10) return { isHand: false, confidence: 0.2 };
-    if (hipY >= shoulderY - 10) return { isHand: false, confidence: 0.3 };
-
-    const dx = Math.abs(shoulderX - hipX);
-    const dy = Math.abs(shoulderY - hipY);
-    const ratio = dx / Math.max(dy, 1);
-    if (ratio > 0.45) return { isHand: false, confidence: 0.5 };
-
-    const wrists = [kp[9], kp[10]].filter(p => p.score > MIN_S);
-    if (wrists.length > 0) {
-      const wristY = Math.max(...wrists.map(p => p.y));
-      if (wristY < shoulderY) return { isHand: false, confidence: 0.6 };
-    }
-
-    const vert = 1 - Math.min(ratio / 0.45, 1);
-    const invert = Math.min((shoulderY - ankleY) / (video.videoHeight * 0.4), 1);
-    return { isHand: true, confidence: Math.min(1, 0.6 + 0.4 * vert * invert) };
-  }
-
-  const SKELETON_EDGES = [
-    [0,1],[0,2],[1,3],[2,4],
-    [5,6],[5,7],[7,9],[6,8],[8,10],
-    [5,11],[6,12],[11,12],
-    [11,13],[13,15],[12,14],[14,16]
-  ];
-
-  function drawPose(kp, isHand) {
-    ctx.clearRect(0, 0, canvas.width, canvas.height);
-    if (!drawSkeleton) return;
-    const color = isHand ? '#00ff88' : '#7d8590';
-    ctx.strokeStyle = color;
-    ctx.fillStyle = color;
-    ctx.lineWidth = 3;
-    SKELETON_EDGES.forEach(([a, b]) => {
-      const pa = kp[a], pb = kp[b];
-      if (pa.score > 0.25 && pb.score > 0.25) {
-        ctx.beginPath();
-        ctx.moveTo(pa.x, pa.y);
-        ctx.lineTo(pb.x, pb.y);
-        ctx.stroke();
-      }
-    });
-    kp.forEach(p => {
-      if (p.score > 0.25) {
-        ctx.beginPath();
-        ctx.arc(p.x, p.y, 5, 0, Math.PI * 2);
-        ctx.fill();
-      }
-    });
-  }
-
-  async function loop() {
-    if (!running) return;
-    const t = performance.now();
-
-    frames++;
-    if (t - fpsLastUpdate > 500) {
-      fpsEl.textContent = Math.round((frames * 1000) / (t - fpsLastUpdate));
-      frames = 0;
-      fpsLastUpdate = t;
-    }
-
-    try {
-      const kp = await predictPose();
-      const { isHand, confidence } = classifyHandstand(kp);
-
-      confFill.style.width = (confidence * 100) + '%';
-      poseState.textContent = isHand ? 'INVERTED' : 'UPRIGHT';
-      poseState.style.color = isHand ? 'var(--accent)' : 'var(--text)';
-
-      drawPose(kp, isHand);
-
-      if (isHand) {
-        consecHand++;
-        consecNo = 0;
-        if (!inHandstand && consecHand >= ENTER_THRESHOLD) {
-          inHandstand = true;
-          handstandStart = t - (ENTER_THRESHOLD * (1000 / 30));
-          timerCard.classList.add('holding');
-          timerState.textContent = '// Handstand confirmed';
-          timerSub.textContent = 'Hold steady. Auto-logs on dismount.';
-          beep(880, 0.1);
-        }
-      } else {
-        consecNo++;
-        consecHand = 0;
-        if (inHandstand && consecNo >= EXIT_THRESHOLD) {
-          const duration = t - handstandStart - (EXIT_THRESHOLD * (1000 / 30));
-          inHandstand = false;
-          timerCard.classList.remove('holding');
-          if (duration > 500) {
-            attempts.push({ duration, ts: Date.now() });
-            const isNewPb = duration > pb;
-            if (isNewPb) { pb = duration; beep(1320, 0.3); }
-            else { beep(440, 0.15); }
-            renderLog();
-            timerSub.textContent = `Logged ${fmtTime(duration)}s${isNewPb ? ' · new PB ★' : ''}.`;
-          } else {
-            timerSub.textContent = 'Too brief — not logged.';
-          }
-          timerState.textContent = '// Awaiting handstand';
-          timerDisplay.textContent = '00.00';
-        }
-      }
-
-      if (inHandstand) {
-        timerDisplay.textContent = fmtTime(t - handstandStart);
-      }
-    } catch (err) {
-      console.error('Detection error:', err);
-    }
-
-    requestAnimationFrame(loop);
-  }
-
-  startBtn.addEventListener('click', startCamera);
-
-  mirrorToggle.addEventListener('click', () => {
-    mirror = !mirror;
-    mirrorToggle.classList.toggle('on', mirror);
-    camWrap.classList.toggle('mirrored', mirror);
-  });
-
-  skeletonToggle.addEventListener('click', () => {
-    drawSkeleton = !drawSkeleton;
-    skeletonToggle.classList.toggle('on', drawSkeleton);
-    if (!drawSkeleton) ctx.clearRect(0, 0, canvas.width, canvas.height);
-  });
-
-  audioToggle.addEventListener('click', () => {
-    audioCue = !audioCue;
-    audioToggle.classList.toggle('on', audioCue);
-    if (audioCue) beep(880, 0.1);
-  });
-
-  resetBtn.addEventListener('click', () => {
-    if (attempts.length === 0) return;
-    if (!confirm('Reset session? This clears attempts and PB.')) return;
-    attempts.length = 0;
-    pb = 0;
-    renderLog();
-    timerDisplay.textContent = '00.00';
-    timerSub.textContent = 'Session cleared.';
-  });
-})();
-</script>
-</body>
-</html>
-
+function StatCard({ label, value, unit, big }) {
+  return (
+    <div className="bg-[#fbf5e0] border-2 border-[#3a2410] px-3 py-2">
+      <div
+        className="text-[9px] uppercase tracking-[0.2em] text-[#5C3317]"
+        style={{ fontFamily: 'JetBrains Mono, monospace' }}
+      >
+        {label}
+      </div>
+      <div
+        className={`${big ? 'text-3xl' : 'text-xl'} text-[#3a2410] tabular-nums leading-tight`}
+        style={{ fontFamily: 'JetBrains Mono, monospace', fontWeight: 700 }}
+      >
+        {value}
+        <span className="text-xs ml-1 opacity-60 font-normal">{unit}</span>
+      </div>
+    </div>
+  );
+}
