@@ -13,26 +13,26 @@
   body {
     font-family: 'Fraunces', serif;
     color: #1a1410;
-    background: #f5ecd4;
+    background: #f3ecdc;
     min-height: 100vh;
     position: relative;
     overflow-x: hidden;
   }
 
-  /* Mountain background as inline SVG */
+  /* Mountain background image */
   .bg {
     position: fixed;
     inset: 0;
     z-index: 0;
     pointer-events: none;
-    display: flex;
-    align-items: center;
-    justify-content: center;
+    background-image: url("blackhead.jpg");
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: contain;
+    background-color: #f3ecdc;
   }
-  .bg svg {
-    width: min(1100px, 95vw);
-    height: auto;
-    opacity: 0.92;
+  @media (max-width: 900px) {
+    .bg { background-size: 180% auto; background-position: center 65%; }
   }
 
   /* subtle paper texture overlay */
@@ -187,72 +187,7 @@
 </head>
 <body>
 
-<div class="bg" aria-hidden="true">
-  <!-- Minimalist mountain over water -->
-  <svg viewBox="0 0 1200 1200" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
-    <!-- left hills -->
-    <path fill="#1a1410" d="
-      M 60 720
-      C 140 700, 200 690, 250 695
-      C 300 700, 340 720, 380 720
-      C 420 720, 460 705, 510 700
-      C 560 695, 600 705, 640 712
-      L 700 720
-      L 60 720 Z
-    "/>
-    <!-- main mountain (right) -->
-    <path fill="#1a1410" d="
-      M 560 720
-      L 690 540
-      L 740 460
-      L 780 370
-      L 810 300
-      L 835 250
-      L 855 305
-      L 880 360
-      L 895 410
-      L 870 450
-      L 905 510
-      L 935 555
-      L 980 605
-      L 1040 660
-      L 1110 700
-      L 1140 720
-      Z
-    "/>
-    <!-- white lightning crack on the mountain -->
-    <path fill="none" stroke="#f5ecd4" stroke-width="5" stroke-linejoin="miter" stroke-linecap="butt" d="
-      M 835 252
-      L 820 320
-      L 838 350
-      L 815 410
-      L 832 455
-      L 805 520
-      L 820 570
-      L 800 640
-      L 815 700
-      L 808 720
-    "/>
-    <!-- water ripples -->
-    <g fill="#1a1410">
-      <rect x="140" y="760" width="260" height="6" rx="3"/>
-      <rect x="470" y="760" width="180" height="6" rx="3"/>
-      <rect x="730" y="760" width="300" height="6" rx="3"/>
-
-      <rect x="220" y="795" width="160" height="5" rx="2.5"/>
-      <rect x="430" y="795" width="220" height="5" rx="2.5"/>
-      <rect x="720" y="795" width="120" height="5" rx="2.5"/>
-      <rect x="880" y="795" width="180" height="5" rx="2.5"/>
-
-      <rect x="300" y="828" width="120" height="5" rx="2.5"/>
-      <rect x="500" y="828" width="180" height="5" rx="2.5"/>
-      <rect x="760" y="828" width="100" height="5" rx="2.5"/>
-
-      <rect x="380" y="860" width="180" height="4" rx="2"/>
-      <rect x="640" y="860" width="140" height="4" rx="2"/>
-    </g>
-  </svg>
-</div>
+<div class="bg" aria-hidden="true"></div>
 
 <div class="grain"></div>
 
