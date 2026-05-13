@@ -1,0 +1,476 @@
+
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Water Rocket Lab — L&amp;P 1.5L</title>
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,700;9..144,900&family=JetBrains+Mono:wght@400;700&display=swap" rel="stylesheet">
+<script src="https://unpkg.com/react@18/umd/react.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js" crossorigin></script>
+<script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+<style>
+  * { box-sizing: border-box; }
+  html, body { margin: 0; padding: 0; background: #f5ecd4; font-family: 'Fraunces', serif; }
+  input[type=range] { -webkit-appearance: none; appearance: none; background: transparent; }
+  input[type=range]::-webkit-slider-thumb {
+    -webkit-appearance: none; appearance: none;
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #f5ecd4; border: 2.5px solid #3a2410;
+    cursor: pointer; box-shadow: 0 2px 4px rgba(58,36,16,0.3);
+    margin-top: -10px;
+  }
+  input[type=range]::-moz-range-thumb {
+    width: 22px; height: 22px; border-radius: 50%;
+    background: #f5ecd4; border: 2.5px solid #3a2410; cursor: pointer;
+  }
+  input[type=range]::-webkit-slider-runnable-track { height: 4px; border-radius: 2px; }
+  input[type=range]::-moz-range-track { height: 4px; border-radius: 2px; }
+  .grid-bg {
+    background-image:
+      linear-gradient(rgba(92,51,23,0.06) 1px, transparent 1px),
+      linear-gradient(90deg, rgba(92,51,23,0.06) 1px, transparent 1px);
+    background-size: 20px 20px;
+  }
+  .wrap { max-width: 760px; margin: 0 auto; padding: 16px; }
+  .header { border-bottom: 2px solid #3a2410; padding-bottom: 16px; margin-bottom: 24px; }
+  .h-row { display: flex; align-items: baseline; justify-content: space-between; flex-wrap: wrap; gap: 8px; }
+  h1 { font-family: 'Fraunces', serif; font-weight: 900; letter-spacing: -0.02em; color: #3a2410; font-size: 36px; margin: 0; line-height: 1; }
+  .mono { font-family: 'JetBrains Mono', monospace; }
+  .tag { font-size: 10px; text-transform: uppercase; letter-spacing: 0.3em; color: #5C3317; }
+  .subhead { font-size: 14px; color: #5C3317; margin-top: 8px; font-style: italic; }
+  .grid2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+  .panel { background: #fbf5e0; border: 2px solid #3a2410; padding: 16px; }
+  .panel-thin { background: #fbf5e0; border: 2px solid #3a2410; padding: 8px; position: relative; }
+  .stat { background: #fbf5e0; border: 2px solid #3a2410; padding: 8px 12px; margin-bottom: 8px; }
+  .stat-label { font-family: 'JetBrains Mono', monospace; font-size: 9px; text-transform: uppercase; letter-spacing: 0.2em; color: #5C3317; }
+  .stat-value { font-family: 'JetBrains Mono', monospace; color: #3a2410; font-weight: 700; line-height: 1.1; font-variant-numeric: tabular-nums; }
+  .stat-value.big { font-size: 28px; }
+  .stat-value.med { font-size: 20px; }
+  .stat-unit { font-size: 11px; opacity: 0.6; margin-left: 4px; font-weight: 400; }
+  .slider-row { margin-bottom: 18px; }
+  .slider-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 6px; }
+  .slider-label { font-family: 'Fraunces', serif; font-size: 12px; text-transform: uppercase; letter-spacing: 0.2em; color: #5C3317; font-weight: 600; }
+  .slider-val { font-family: 'JetBrains Mono', monospace; font-size: 22px; color: #3a2410; font-variant-numeric: tabular-nums; }
+  .ctrls-divider { display: flex; align-items: center; gap: 8px; margin-bottom: 14px; }
+  .ctrls-divider .line { flex: 1; height: 1px; background: #3a2410; opacity: 0.3; }
+  .note { font-size: 12px; color: #5C3317; line-height: 1.5; }
+  .note p { margin: 0 0 8px 0; }
+  .note .lbl { font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; font-size: 10px; }
+  .chart-head { display: flex; align-items: baseline; justify-content: space-between; margin-bottom: 12px; }
+  .chart-head h2 { font-family: 'Fraunces', serif; font-size: 14px; text-transform: uppercase; letter-spacing: 0.2em; color: #3a2410; font-weight: 600; margin: 0; }
+  .legend-mark { display: inline-block; width: 8px; height: 8px; background: #E8C547; margin-right: 6px; vertical-align: middle; }
+</style>
+</head>
+<body>
+<div id="root"></div>
+
+<script type="text/babel">
+const { useState, useMemo } = React;
+
+// ─────────────────────────────────────────────────────────────
+// Water rocket physics simulator
+// ─────────────────────────────────────────────────────────────
+function simulateRocket(waterML, psi, angleDeg) {
+  const g = 9.81;
+  const rhoWater = 1000;
+  const rhoAir = 1.225;
+  const Patm = 101325;
+  const gamma = 1.4;
+  const Cd = 0.5;
+
+  const Vbottle = 0.0015;
+  const dryMass = 0.047;
+  const dNozzle = 0.022;
+  const Anozzle = Math.PI * (dNozzle / 2) ** 2;
+  const Across = Math.PI * 0.04 ** 2;
+
+  const Vwater0 = Math.max(0, Math.min(Vbottle * 0.95, waterML / 1e6));
+  const Vair0 = Vbottle - Vwater0;
+  const P0 = psi * 6894.76 + Patm;
+  const angle = (angleDeg * Math.PI) / 180;
+
+  if (Vair0 <= 0 || P0 <= Patm) {
+    return { peak: 0, range: 0, exitV: 0, burnT: 0, flightT: 0, peakIdx: 0, initialThrust: 0, traj: [{ x: 0, y: 0, t: 0 }] };
+  }
+
+  const dt = 0.0005;
+  let t = 0, x = 0, y = 0, vx = 0, vy = 0;
+  let mWater = Vwater0 * rhoWater;
+  let Vair = Vair0;
+  let burnT = null;
+  let peak = 0, peakIdx = 0;
+  const traj = [{ x: 0, y: 0, t: 0 }];
+  const exitV0 = Math.sqrt((2 * (P0 - Patm)) / rhoWater);
+
+  let step = 0;
+  while (y >= 0 && t < 25) {
+    const mTot = dryMass + mWater;
+    let Fthrust = 0;
+
+    if (mWater > 0) {
+      const P = P0 * Math.pow(Vair0 / Vair, gamma);
+      if (P > Patm) {
+        const ve = Math.sqrt((2 * (P - Patm)) / rhoWater);
+        Fthrust = rhoWater * Anozzle * ve * ve;
+        const dm = rhoWater * Anozzle * ve * dt;
+        mWater = Math.max(0, mWater - dm);
+        Vair = Math.min(Vbottle, Vair + Anozzle * ve * dt);
+      }
+    }
+    if (mWater <= 0 && burnT === null) burnT = t;
+
+    const speed = Math.hypot(vx, vy);
+    let tx, ty;
+    if (speed < 0.05) {
+      tx = Fthrust * Math.cos(angle);
+      ty = Fthrust * Math.sin(angle);
+    } else {
+      tx = (Fthrust * vx) / speed;
+      ty = (Fthrust * vy) / speed;
+    }
+    const Fd = 0.5 * rhoAir * Cd * Across * speed * speed;
+    const dx = speed > 0.05 ? (-Fd * vx) / speed : 0;
+    const dy = speed > 0.05 ? (-Fd * vy) / speed : 0;
+
+    const ax = (tx + dx) / mTot;
+    const ay = (ty + dy) / mTot - g;
+
+    vx += ax * dt;
+    vy += ay * dt;
+    x += vx * dt;
+    y += vy * dt;
+
+    if (y > peak) { peak = y; peakIdx = traj.length; }
+    step++;
+    if (step % 40 === 0) traj.push({ x, y: Math.max(0, y), t });
+    t += dt;
+  }
+  traj.push({ x, y: 0, t });
+
+  return {
+    peak, range: x, exitV: exitV0,
+    burnT: burnT ?? 0, flightT: t, peakIdx,
+    initialThrust: 2 * Anozzle * (P0 - Patm),
+    traj,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────
+// Trajectory chart (inline SVG)
+// ─────────────────────────────────────────────────────────────
+function TrajectoryChart({ traj, peakIdx }) {
+  const W = 700, H = 220, padL = 40, padR = 10, padT = 10, padB = 28;
+  const innerW = W - padL - padR;
+  const innerH = H - padT - padB;
+
+  const maxX = Math.max(1, ...traj.map(p => p.x));
+  const maxY = Math.max(1, ...traj.map(p => p.y));
+  const xScale = v => padL + (v / maxX) * innerW;
+  const yScale = v => padT + innerH - (v / maxY) * innerH;
+
+  const pathD = traj.map((p, i) => (i === 0 ? 'M' : 'L') + xScale(p.x).toFixed(1) + ' ' + yScale(p.y).toFixed(1)).join(' ');
+  const peak = traj[peakIdx] || { x: 0, y: 0 };
+
+  const xTicks = 5, yTicks = 4;
+  const xT = Array.from({ length: xTicks + 1 }, (_, i) => (maxX * i) / xTicks);
+  const yT = Array.from({ length: yTicks + 1 }, (_, i) => (maxY * i) / yTicks);
+
+  return (
+    <svg viewBox={`0 0 ${W} ${H}`} style={{ width: '100%', height: 'auto', display: 'block' }}>
+      {/* grid */}
+      {yT.map((v, i) => (
+        <line key={'y' + i} x1={padL} x2={W - padR} y1={yScale(v)} y2={yScale(v)} stroke="#3a2410" strokeWidth="0.3" opacity="0.2" />
+      ))}
+      {xT.map((v, i) => (
+        <line key={'x' + i} x1={xScale(v)} x2={xScale(v)} y1={padT} y2={H - padB} stroke="#3a2410" strokeWidth="0.3" opacity="0.2" />
+      ))}
+      {/* axes */}
+      <line x1={padL} y1={H - padB} x2={W - padR} y2={H - padB} stroke="#3a2410" strokeWidth="1.2" />
+      <line x1={padL} y1={padT} x2={padL} y2={H - padB} stroke="#3a2410" strokeWidth="1.2" />
+      {/* axis labels */}
+      {xT.map((v, i) => (
+        <text key={'xl' + i} x={xScale(v)} y={H - padB + 14} textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="10" fill="#5C3317">{v.toFixed(0)}</text>
+      ))}
+      {yT.map((v, i) => (
+        <text key={'yl' + i} x={padL - 6} y={yScale(v) + 3} textAnchor="end" fontFamily="JetBrains Mono, monospace" fontSize="10" fill="#5C3317">{v.toFixed(0)}</text>
+      ))}
+      {/* trajectory */}
+      <path d={pathD} fill="none" stroke="#5C3317" strokeWidth="2.2" />
+      {/* peak marker */}
+      <circle cx={xScale(peak.x)} cy={yScale(peak.y)} r="5" fill="#E8C547" stroke="#3a2410" strokeWidth="1.5" />
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Bottle SVG (inverted / flight orientation)
+// ─────────────────────────────────────────────────────────────
+function BottleDiagram({ waterML, psi }) {
+  const fillPct = Math.min(1, waterML / 1500);
+  const bodyTop = 55, bodyBottom = 248;
+  const bodyHeight = bodyBottom - bodyTop;
+  const waterTop = bodyBottom - bodyHeight * fillPct;
+  const psiNeedle = Math.min(140, psi) / 140;
+  const needleAngle = -135 + psiNeedle * 270;
+
+  const bottlePath = `
+    M 75 38 Q 100 30 125 38 L 144 55 L 144 248
+    Q 144 273 122 285 L 122 314 L 116 318 L 84 318
+    L 78 314 L 78 285 Q 56 273 56 248 L 56 55 L 75 38 Z`;
+
+  const labelTop = 70, labelBottom = 170;
+
+  return (
+    <svg viewBox="0 0 200 380" style={{ width: '100%', height: '100%', display: 'block' }}>
+      <defs>
+        <linearGradient id="capRed" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#e63946" />
+          <stop offset="55%" stopColor="#c01e2c" />
+          <stop offset="100%" stopColor="#7a1018" />
+        </linearGradient>
+        <linearGradient id="plastic" x1="0" y1="0" x2="1" y2="0">
+          <stop offset="0%" stopColor="#3a2410" stopOpacity="0.10" />
+          <stop offset="18%" stopColor="#ffffff" stopOpacity="0.55" />
+          <stop offset="55%" stopColor="#ffffff" stopOpacity="0.15" />
+          <stop offset="100%" stopColor="#3a2410" stopOpacity="0.12" />
+        </linearGradient>
+        <linearGradient id="waterFill" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#bcdcec" stopOpacity="0.7" />
+          <stop offset="100%" stopColor="#6a9fc0" stopOpacity="0.55" />
+        </linearGradient>
+        <linearGradient id="labelBrown" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0%" stopColor="#4a2a14" />
+          <stop offset="50%" stopColor="#3a1e0c" />
+          <stop offset="100%" stopColor="#2a1408" />
+        </linearGradient>
+        <pattern id="grid" width="10" height="10" patternUnits="userSpaceOnUse">
+          <path d="M 10 0 L 0 0 0 10" fill="none" stroke="#5C3317" strokeWidth="0.3" opacity="0.15" />
+        </pattern>
+        <clipPath id="bottleClip"><path d={bottlePath} /></clipPath>
+      </defs>
+
+      <rect width="200" height="380" fill="url(#grid)" />
+
+      {/* clear plastic body */}
+      <path d={bottlePath} fill="url(#plastic)" stroke="#3a2410" strokeWidth="1.6" />
+
+      {/* water — pools at the cap end */}
+      <g clipPath="url(#bottleClip)">
+        {waterML > 0 && <>
+          <rect x="50" y={waterTop} width="100" height={320 - waterTop} fill="url(#waterFill)" />
+          <path d={`M 50 ${waterTop} Q 75 ${waterTop - 2.5} 100 ${waterTop} T 150 ${waterTop}`}
+            fill="none" stroke="#3a2410" strokeWidth="0.8" opacity="0.5" />
+        </>}
+      </g>
+
+      {/* highlight stripe */}
+      <path d="M 135 62 Q 138 155 135 245" fill="none" stroke="#ffffff" strokeWidth="2" opacity="0.45" />
+
+      {/* petaloid base hints (at top — acting as nose) */}
+      <g stroke="#3a2410" strokeWidth="0.6" fill="none" opacity="0.55">
+        <path d="M 72 38 Q 75 30 78 38" />
+        <path d="M 88 35 Q 91 26 94 35" />
+        <path d="M 106 35 Q 109 26 112 35" />
+        <path d="M 122 38 Q 125 30 128 38" />
+      </g>
+
+      {/* tamper ring */}
+      <rect x="82" y="316" width="36" height="6" fill="#a01828" stroke="#3a2410" strokeWidth="0.4" />
+
+      {/* red cap (nozzle end, bottom) */}
+      <rect x="80" y="322" width="40" height="26" rx="1.5" fill="url(#capRed)" stroke="#3a2410" strokeWidth="1.2" />
+      <ellipse cx="100" cy="348" rx="20" ry="2.2" fill="#7a1018" />
+      <g stroke="#7a1018" strokeWidth="0.5" opacity="0.7">
+        {Array.from({ length: 11 }, (_, i) => (
+          <line key={i} x1={83 + i * 3.4} y1="324" x2={83 + i * 3.4} y2="346" />
+        ))}
+      </g>
+      <rect x="82.5" y="324" width="3" height="20" fill="#ffffff" opacity="0.35" rx="1" />
+
+      {/* Label rotated 180° to match inverted bottle */}
+      <g transform="rotate(180 100 120)">
+        <path d={`M 56 ${labelTop} Q 100 ${labelTop - 4} 144 ${labelTop} L 144 ${labelBottom} Q 100 ${labelBottom + 4} 56 ${labelBottom} Z`}
+          fill="url(#labelBrown)" stroke="#1a0e05" strokeWidth="0.4" />
+
+        <g>
+          <ellipse cx="78" cy="87" rx="2.6" ry="4" fill="#f4c842" transform="rotate(-22 78 87)" />
+          <ellipse cx="85" cy="82" rx="2.2" ry="3.4" fill="#f4c842" transform="rotate(-6 85 82)" />
+          <ellipse cx="93" cy="84" rx="2.6" ry="4" fill="#f4c842" transform="rotate(14 93 84)" />
+          <ellipse cx="100" cy="88" rx="1.8" ry="2.8" fill="#f4c842" transform="rotate(28 100 88)" />
+        </g>
+
+        <text x="92" y="116" textAnchor="middle" fontFamily="Fraunces, serif" fontSize="24" fontWeight="900"
+          fill="#ffffff" fontStyle="italic" style={{ letterSpacing: '-0.02em' }}>L&amp;P</text>
+
+        <text x="118" y="114" fontFamily="Fraunces, serif" fontSize="3.6" fontWeight="700" fill="#f4c842" letterSpacing="0.3">LEMON</text>
+        <text x="118" y="119" fontFamily="Fraunces, serif" fontSize="3.6" fontWeight="700" fill="#f4c842" letterSpacing="0.3">&amp; PAEROA</text>
+
+        <path d="M 60 131 L 132 131 L 138 139 L 132 147 L 60 147 L 54 139 Z" fill="#ffffff" stroke="#c01e2c" strokeWidth="0.9" />
+        <path d="M 54 139 L 60 131 L 60 147 Z" fill="#c01e2c" opacity="0.85" />
+        <path d="M 138 139 L 132 131 L 132 147 Z" fill="#c01e2c" opacity="0.85" />
+        <text x="96" y="142.5" textAnchor="middle" fontFamily="Fraunces, serif" fontSize="8.5"
+          fontWeight="700" fill="#c01e2c" fontStyle="italic">Zero Sugar</text>
+
+        <g transform="translate(120 160)">
+          <path d="M -2 -8 Q 2 -12 6 -9 Q 4 -6 -2 -8 Z" fill="#5a8c2e" stroke="#3d6020" strokeWidth="0.3" />
+          <path d="M -1 -8 L 4 -10" stroke="#3d6020" strokeWidth="0.3" fill="none" />
+          <ellipse cx="0" cy="0" rx="9" ry="7" fill="#f4c842" stroke="#b8881c" strokeWidth="0.5" />
+          <ellipse cx="-8.5" cy="0" rx="1.5" ry="1.2" fill="#e8b830" />
+          <ellipse cx="8.5" cy="0" rx="1.5" ry="1.2" fill="#e8b830" />
+          <ellipse cx="-2" cy="-2.5" rx="3.5" ry="2" fill="#fbe890" opacity="0.7" />
+        </g>
+
+        <text x="68" y="164" fontFamily="JetBrains Mono, monospace" fontSize="2.4" fill="#ffffff" opacity="0.7">
+          ♻ Clear bottles recycle better
+        </text>
+      </g>
+
+      {/* water-level annotation */}
+      {waterML > 0 && <>
+        <line x1="36" y1={waterTop} x2="55" y2={waterTop} stroke="#3a2410" strokeWidth="0.8" strokeDasharray="2 2" />
+        <line x1="145" y1={waterTop} x2="152" y2={waterTop} stroke="#3a2410" strokeWidth="0.8" strokeDasharray="2 2" opacity="0.5" />
+        <text x="34" y={waterTop + 3} textAnchor="end" fontFamily="JetBrains Mono, monospace" fontSize="9" fill="#3a2410" fontWeight="700">{waterML}mL</text>
+      </>}
+
+      {/* launch direction */}
+      <g transform="translate(22 32)">
+        <polygon points="0,-10 -4,-2 4,-2" fill="#3a2410" />
+        <line x1="0" y1="-2" x2="0" y2="10" stroke="#3a2410" strokeWidth="1.5" />
+        <text x="9" y="5" fontFamily="JetBrains Mono, monospace" fontSize="6.5" fill="#3a2410" fontWeight="700" letterSpacing="0.8">LAUNCH</text>
+      </g>
+
+      {/* nozzle indicator */}
+      <g transform="translate(100 365)">
+        <line x1="-6" y1="-8" x2="0" y2="0" stroke="#3a2410" strokeWidth="0.6" opacity="0.5" />
+        <line x1="6" y1="-8" x2="0" y2="0" stroke="#3a2410" strokeWidth="0.6" opacity="0.5" />
+        <line x1="0" y1="-8" x2="0" y2="0" stroke="#3a2410" strokeWidth="0.6" opacity="0.5" />
+        <text x="14" y="-2" fontFamily="JetBrains Mono, monospace" fontSize="5.5" fill="#3a2410" opacity="0.7" letterSpacing="0.5">NOZZLE</text>
+      </g>
+
+      {/* pressure gauge */}
+      <g transform="translate(176 56)">
+        <circle r="18" fill="#fbf5e0" stroke="#3a2410" strokeWidth="1.4" />
+        {Array.from({ length: 9 }, (_, i) => {
+          const a = (-135 + i * 33.75) * Math.PI / 180;
+          return <line key={i} x1={13 * Math.cos(a)} y1={13 * Math.sin(a)}
+            x2={16 * Math.cos(a)} y2={16 * Math.sin(a)} stroke="#3a2410" strokeWidth="0.6" />;
+        })}
+        <circle r="1.8" fill="#3a2410" />
+        <line x1="0" y1="0"
+          x2={13 * Math.cos((needleAngle * Math.PI) / 180)}
+          y2={13 * Math.sin((needleAngle * Math.PI) / 180)}
+          stroke="#a02020" strokeWidth="1.6" strokeLinecap="round" />
+        <text x="0" y="28" textAnchor="middle" fontFamily="JetBrains Mono, monospace" fontSize="7.5" fill="#3a2410" fontWeight="700">{psi} PSI</text>
+      </g>
+    </svg>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Slider
+// ─────────────────────────────────────────────────────────────
+function Slider({ label, value, setValue, min, max, step, unit, optimal }) {
+  const pct = ((value - min) / (max - min)) * 100;
+  const optimalPct = optimal !== undefined ? ((optimal - min) / (max - min)) * 100 : null;
+  return (
+    <div className="slider-row">
+      <div className="slider-head">
+        <span className="slider-label">{label}</span>
+        <span className="slider-val">{value}<span className="stat-unit">{unit}</span></span>
+      </div>
+      <div style={{ position: 'relative' }}>
+        {optimalPct !== null && (
+          <div style={{ position: 'absolute', top: '50%', transform: 'translateY(-50%)',
+            width: '2px', height: '20px', background: '#E8C547', left: `${optimalPct}%`, zIndex: 0 }} />
+        )}
+        <input type="range" min={min} max={max} step={step} value={value}
+          onChange={(e) => setValue(Number(e.target.value))}
+          style={{
+            width: '100%', height: '8px', borderRadius: '4px',
+            background: `linear-gradient(to right, #5C3317 0%, #8B5A1F ${pct}%, #d6c4a0 ${pct}%, #d6c4a0 100%)`,
+            position: 'relative', zIndex: 1, cursor: 'pointer'
+          }} />
+      </div>
+    </div>
+  );
+}
+
+function StatCard({ label, value, unit, size = 'med' }) {
+  return (
+    <div className="stat">
+      <div className="stat-label">{label}</div>
+      <div className={'stat-value ' + size}>{value}<span className="stat-unit">{unit}</span></div>
+    </div>
+  );
+}
+
+// ─────────────────────────────────────────────────────────────
+// Main
+// ─────────────────────────────────────────────────────────────
+function App() {
+  const [water, setWater] = useState(500);
+  const [psi, setPsi] = useState(70);
+  const [angle, setAngle] = useState(80);
+  const result = useMemo(() => simulateRocket(water, psi, angle), [water, psi, angle]);
+
+  return (
+    <div className="wrap">
+      <div className="header grid-bg">
+        <div className="h-row">
+          <h1>Water Rocket Lab</h1>
+          <span className="mono tag">FIG.01 / 1.5L L&amp;P</span>
+        </div>
+        <div className="subhead">Tune your water and pressure. See how high &amp; how far it goes.</div>
+      </div>
+
+      <div className="grid2">
+        <div className="panel-thin" style={{ aspectRatio: '200 / 380' }}>
+          <div className="mono tag" style={{ position: 'absolute', top: 8, left: 8, fontSize: 9 }}>flight orientation</div>
+          <BottleDiagram waterML={water} psi={psi} />
+        </div>
+        <div>
+          <StatCard label="Peak Altitude" value={result.peak.toFixed(1)} unit="m" size="big" />
+          <StatCard label="Range" value={result.range.toFixed(1)} unit="m" />
+          <StatCard label="Flight Time" value={result.flightT.toFixed(2)} unit="s" />
+          <StatCard label="Exit Velocity" value={result.exitV.toFixed(1)} unit="m/s" />
+          <StatCard label="Burn Time" value={(result.burnT * 1000).toFixed(0)} unit="ms" />
+          <StatCard label="Peak Thrust" value={result.initialThrust.toFixed(1)} unit="N" />
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 24 }}>
+        <div className="ctrls-divider">
+          <div className="line"></div>
+          <span className="mono tag">Controls</span>
+          <div className="line"></div>
+        </div>
+        <Slider label="Water Volume" value={water} setValue={setWater} min={0} max={1500} step={25} unit="mL" optimal={500} />
+        <Slider label="Pressure" value={psi} setValue={setPsi} min={20} max={120} step={5} unit="PSI" />
+        <Slider label="Launch Angle" value={angle} setValue={setAngle} min={45} max={90} step={1} unit="°" />
+        <div className="mono" style={{ fontSize: 10, color: '#5C3317', opacity: 0.7, display: 'flex', alignItems: 'center', gap: 8, paddingTop: 4 }}>
+          <span className="legend-mark"></span>yellow marker = optimum fill (~⅓ of bottle)
+        </div>
+      </div>
+
+      <div className="panel" style={{ marginBottom: 24 }}>
+        <div className="chart-head">
+          <h2>Flight Trajectory</h2>
+          <span className="mono" style={{ fontSize: 10, color: '#5C3317' }}>altitude vs. distance (m)</span>
+        </div>
+        <TrajectoryChart traj={result.traj} peakIdx={result.peakIdx} />
+      </div>
+
+      <div className="note">
+        <p><span className="lbl">Sweet spot:</span> About one-third water (≈500 mL) usually maximises altitude. Too little water = not enough reaction mass; too much = not enough air to push it.</p>
+        <p><span className="lbl">Pressure:</span> A standard 1.5–2 L PET bottle is rated around 80–100 PSI before failing. Stay well below burst pressure, wear eye protection, and launch outdoors with people clear.</p>
+        <p style={{ opacity: 0.7 }}><span className="lbl">Model:</span> Adiabatic air expansion (γ=1.4), Bernoulli exit velocity, drag with Cd≈0.5, dry mass = 47 g (measured), 22 mm nozzle. Real flights will vary with wind, fins, and nose weight.</p>
+      </div>
+    </div>
+  );
+}
+
+ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+</script>
+</body>
+</html>
