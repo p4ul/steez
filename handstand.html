@@ -508,13 +508,22 @@
   let drawSkeleton = false;
   let audioCue = false;
 
-  // Detection state machine
-  let consecHand = 0;
-  let consecNo = 0;
-  const ENTER_THRESHOLD = 5;   // ~165ms at 30fps to confirm handstand
-  const EXIT_THRESHOLD = 12;   // ~400ms tolerance for wobbles
+  // Detection state machine (time-based so it behaves the same at 15fps and 60fps)
+  const ENTER_DURATION_MS = 165;  // require ~165ms of inverted frames to confirm
+  const EXIT_DURATION_MS = 400;   // tolerate ~400ms of upright wobble before logging
+  let invertedStreakStart = 0;    // perf.now() of first inverted frame in current streak, 0 if none
+  let uprightStreakStart = 0;     // perf.now() of first upright frame in current streak, 0 if none
   let inHandstand = false;
   let handstandStart = 0;
+
+  // iOS quirks: TFJS WebGL backend on iPhone Safari silently produces zero/NaN
+  // keypoint scores on some GPUs (FP16 + packed depthwise conv), and a portrait
+  // device can still hand back a landscape (sideways) camera stream.
+  const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent)
+    || (navigator.userAgent.includes('Mac') && navigator.maxTouchPoints > 1);
+  // Degrees of clockwise rotation to apply to the camera frame before MoveNet
+  // sees it; keypoints are mapped back to video pixel coords afterwards.
+  let inputRotation = 0;
 
   // Session
   const attempts = [];
@@ -594,13 +603,28 @@
     startBtn.style.display = 'none';
 
     try {
+      // Match the camera constraint to device orientation — an iPhone held in
+      // portrait otherwise often hands back a landscape (sideways) stream that
+      // MoveNet can't read.
+      const portrait = window.matchMedia('(orientation: portrait)').matches;
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 720 } },
+        video: {
+          facingMode: 'user',
+          width:  { ideal: portrait ? 720  : 1280 },
+          height: { ideal: portrait ? 1280 : 720  }
+        },
         audio: false
       });
       video.srcObject = stream;
       await new Promise(r => video.onloadedmetadata = r);
       await video.play();
+
+      // If the camera ignored the orientation hint and still delivered a sideways
+      // stream, rotate the model input so the body is upright for inference.
+      const videoPortrait = video.videoHeight > video.videoWidth;
+      if (portrait && !videoPortrait) inputRotation = 90;
+      else if (!portrait && videoPortrait) inputRotation = 270;
+      else inputRotation = 0;
 
       canvas.width = video.videoWidth;
       canvas.height = video.videoHeight;
@@ -608,6 +632,12 @@
       setStatus('Loading model…', 'loading');
       overlayDesc.textContent = 'Loading MoveNet weights (~10MB)…';
 
+      if (isIOS) {
+        // Disable FP16 textures and packed depthwise conv; both cause MoveNet
+        // to silently return zeroed keypoints on several iPhone GPUs.
+        tf.env().set('WEBGL_FORCE_F16_TEXTURES', false);
+        tf.env().set('WEBGL_PACK_DEPTHWISECONV', false);
+      }
       await tf.setBackend('webgl');
       await tf.ready();
 
@@ -644,8 +674,14 @@
 
   // --- inference ---
   async function predictPose() {
+    const W = video.videoWidth, H = video.videoHeight;
     const input = tf.tidy(() => {
-      const img = tf.browser.fromPixels(video);
+      let img = tf.browser.fromPixels(video);
+      // Rotate the frame to upright before resize; transpose+reverse keeps the
+      // pixels lossless (unlike tf.image.rotateWithOffset which letterboxes).
+      if (inputRotation === 90)       img = tf.reverse(tf.transpose(img, [1, 0, 2]), [1]);
+      else if (inputRotation === 180) img = tf.reverse(img, [0, 1]);
+      else if (inputRotation === 270) img = tf.reverse(tf.transpose(img, [1, 0, 2]), [0]);
       return tf.image.resizeBilinear(img, [192, 192]).toInt().expandDims(0);
     });
     const result = await model.executeAsync(input);
@@ -655,11 +691,17 @@
 
     const kp = [];
     for (let i = 0; i < 17; i++) {
-      kp.push({
-        y: data[i * 3] * video.videoHeight,
-        x: data[i * 3 + 1] * video.videoWidth,
-        score: data[i * 3 + 2]
-      });
+      const ry = data[i * 3];        // normalized row in rotated frame
+      const rx = data[i * 3 + 1];    // normalized col in rotated frame
+      const score = data[i * 3 + 2];
+      // Map back to original video pixel coords so the classifier and skeleton
+      // overlay use the same frame the user sees.
+      let x, y;
+      if (inputRotation === 0)        { x = rx * W;       y = ry * H; }
+      else if (inputRotation === 90)  { x = ry * W;       y = (1 - rx) * H; }
+      else if (inputRotation === 180) { x = (1 - rx) * W; y = (1 - ry) * H; }
+      else                            { x = (1 - ry) * W; y = rx * H; }
+      kp.push({ x, y, score });
     }
     return kp;
   }
@@ -764,21 +806,21 @@
       drawPose(kp, isHand);
 
       if (isHand) {
-        consecHand++;
-        consecNo = 0;
-        if (!inHandstand && consecHand >= ENTER_THRESHOLD) {
+        if (invertedStreakStart === 0) invertedStreakStart = t;
+        uprightStreakStart = 0;
+        if (!inHandstand && t - invertedStreakStart >= ENTER_DURATION_MS) {
           inHandstand = true;
-          handstandStart = t - (ENTER_THRESHOLD * (1000 / 30));
+          handstandStart = invertedStreakStart;
           timerCard.classList.add('holding');
           timerState.textContent = '// Handstand confirmed';
           timerSub.textContent = 'Hold steady. Auto-logs on dismount.';
           beep(880, 0.1);
         }
       } else {
-        consecNo++;
-        consecHand = 0;
-        if (inHandstand && consecNo >= EXIT_THRESHOLD) {
-          const duration = t - handstandStart - (EXIT_THRESHOLD * (1000 / 30));
+        if (uprightStreakStart === 0) uprightStreakStart = t;
+        invertedStreakStart = 0;
+        if (inHandstand && t - uprightStreakStart >= EXIT_DURATION_MS) {
+          const duration = uprightStreakStart - handstandStart;
           inHandstand = false;
           timerCard.classList.remove('holding');
           if (duration > 500) {
